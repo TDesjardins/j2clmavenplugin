@@ -99,6 +99,7 @@ public class TestMojo extends AbstractBuildMojo implements ClosureBuildConfigura
         }
 
         Map<String, String> failedTests = new HashMap<>();
+        Map<String, String> passedTests = new HashMap<>();
 
         PluginDescriptor pluginDescriptor = (PluginDescriptor) getPluginContext().get("pluginDescriptor");
         String pluginVersion = pluginDescriptor.getVersion();
@@ -207,40 +208,48 @@ public class TestMojo extends AbstractBuildMojo implements ClosureBuildConfigura
                     throw new UncheckedIOException(ex);
                 }
                 // assuming that was successful, start htmlunit to run the test
-                WebDriver driver = createBrowser();
-                try {
-                    driver.get("file://" + startupHtmlFile);
-                    // loop and poll if tests are done
-                    new FluentWait<>(driver)
-                            .withTimeout(Duration.ofMinutes(1))
-                            .withMessage("Tests failed to finish in timeout")
-                            .pollingEvery(Duration.ofMillis(100))
-                            .until(d -> isFinished(d));
-                    // check for success
-                    if (!isSuccess(driver)) {
-                        // print the content of the browser console to the log
-                        this.analyzeLog(driver);
+                for (WebDriver driver : createBrowsers()) {
+
+                    getLog().info("Test with Driver: " + driver.toString());
+
+                    try {
+                        driver.get("file://" + startupHtmlFile);
+                        // loop and poll if tests are done
+                        new FluentWait<>(driver)
+                                .withTimeout(Duration.ofMinutes(1))
+                                .withMessage("Tests failed to finish in timeout")
+                                .pollingEvery(Duration.ofMillis(100))
+                                .until(d -> isFinished(d));
+                        // check for success
+                        if (!isSuccess(driver)) {
+                            // print the content of the browser console to the log
+                            this.analyzeLog(driver);
+                            failedTests.put(config.getTest(), startupHtmlFile);
+                            getLog().error("Test failed!");
+                        } else {
+                            passedTests.put(config.getTest(), startupHtmlFile);
+                            getLog().info(config.getTest() + " Test passed!");
+                        }
+                    } catch (Exception ex) {
                         failedTests.put(config.getTest(), startupHtmlFile);
+                        if (!Objects.isNull(driver)) {
+                            this.analyzeLog(driver);
+                        }
                         getLog().error("Test failed!");
-                    } else {
-                        getLog().info("Test passed!");
-                    }
-                } catch (Exception ex) {
-                    failedTests.put(config.getTest(), startupHtmlFile);
-                    if (!Objects.isNull(driver)) {
-                        this.analyzeLog(driver);
-                    }
-                    getLog().error("Test failed!");
-                    getLog().error(cleanForMavenLog(String.format(ex.getMessage())));
-                } finally {
-                    if (driver != null) {
-                        driver.quit();
+                        getLog().error(cleanForMavenLog(String.format(ex.getMessage())));
+                    } finally {
+                        if (driver != null) {
+                            driver.quit();
+                        }
                     }
                 }
+
             }
         } catch (ProjectBuildingException | IOException e) {
             throw new MojoExecutionException("Failed to build project structure", e);
         }
+        getLog().info("------------------------------------------------------------------------");
+        getLog().info("Tests run: " + (passedTests.size() + failedTests.size()) + ", Failures: " + failedTests.size());
 
         if(failedTests.isEmpty()) {
             getLog().info("All tests were passed successfully!");
@@ -250,7 +259,18 @@ public class TestMojo extends AbstractBuildMojo implements ClosureBuildConfigura
         }
     }
 
-    private WebDriver createBrowser() throws MojoExecutionException {
+    private List<WebDriver> createBrowsers() throws MojoExecutionException {
+        List<WebDriver> drivers = new ArrayList<WebDriver>();
+        String[] driversStrings = webdriver.split(",");
+
+        for (String driversString : driversStrings) {
+            drivers.add(createBrowser(driversString.trim()));
+        }
+
+        return drivers;
+    }
+
+    private WebDriver createBrowser(String webdriver) throws MojoExecutionException {
         if ("chrome".equalsIgnoreCase(webdriver)) {
             ChromeOptions chromeOptions = new ChromeOptions();
             chromeOptions.setHeadless(true);
